@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 
 from database import get_connection
 
@@ -29,6 +30,18 @@ def detect_stockout():
             continue
 
         days_remaining = current_stock / daily_usage
+
+        active_order = connection.execute("""
+            SELECT id
+            FROM purchase_orders
+            WHERE inventory_id = ?
+            AND status IN ('Pending Approval', 'Approved')
+        """, (
+            product["id"],
+        )).fetchone()
+
+        if active_order:
+            continue
 
         if days_remaining <= product["reorder_threshold_days"]:
             product["days_remaining"] = days_remaining
@@ -163,6 +176,71 @@ def calculate_order_quantity(product):
         1,
         math.ceil(quantity_needed)
     )
+def create_purchase_order(product, supplier):
+    """
+    Creates a purchase order in the database.
+    The first version always requires human approval.
+    """
+
+    quantity = calculate_order_quantity(product)
+
+    unit_price = supplier["unit_price"]
+    total_price = quantity * unit_price
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        INSERT INTO purchase_orders (
+            created_at,
+            inventory_id,
+            supplier_id,
+            quantity,
+            unit_price,
+            total_price,
+            status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        datetime.now().isoformat(timespec="seconds"),
+        product["id"],
+        supplier["supplier_id"],
+        quantity,
+        unit_price,
+        total_price,
+        "Pending Approval"
+    ))
+
+    purchase_order_id = cursor.lastrowid
+
+    connection.commit()
+    connection.close()
+
+    return purchase_order_id, quantity, total_price
+
+
+def write_decision(message):
+    """
+    Saves an important Betsy decision to the audit log.
+    """
+
+    connection = get_connection()
+
+    connection.execute("""
+        INSERT INTO decisions (
+            created_at,
+            decision_type,
+            message
+        )
+        VALUES (?, ?, ?)
+    """, (
+        datetime.now().isoformat(timespec="seconds"),
+        "Procurement Decision",
+        message
+    ))
+
+    connection.commit()
+    connection.close()
 
 
 def run_procurement_check():
@@ -243,11 +321,27 @@ def run_procurement_check():
 
         return
 
-    quantity = calculate_order_quantity(product)
 
-    total_price = (
-        quantity * selected_supplier["unit_price"]
+    purchase_order_id, quantity, total_price = (
+        create_purchase_order(
+            product,
+            selected_supplier
+        )
     )
+
+    message = (
+        f"PO-{purchase_order_id:04d} created for "
+        f"{product['name']}. "
+        f"Selected supplier: "
+        f"{selected_supplier['name']}. "
+        f"Predicted stockout in "
+        f"{product['days_remaining']:.2f} days. "
+        f"Quantity: {quantity}. "
+        f"Total value: EUR {total_price:.2f}. "
+        f"Status: Pending Approval."
+    )
+
+    write_decision(message)
 
     print("\n--- BETSY DECISION ---")
 
@@ -268,6 +362,19 @@ def run_procurement_check():
     print(
         f"Total order value: "
         f"EUR {total_price:.2f}"
+    )
+
+    print(
+        f"Purchase order: "
+        f"PO-{purchase_order_id:04d}"
+    )
+
+    print(
+        "Status: Pending Approval"
+    )
+
+    print(
+        "\nDecision saved to Betsy's decision log."
     )
 
 
