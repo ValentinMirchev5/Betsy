@@ -251,9 +251,15 @@ def run_procurement_check():
     product = detect_stockout()
 
     if product is None:
-        print("\nNo stockout risk detected.")
-        print("No procurement action is required.")
-        return
+     message = (
+        "No new procurement action is required. "
+        "Inventory is safe or an active purchase order "
+        "already exists."
+    )
+
+    print(f"\n{message}")
+
+    return message
 
     print("\n--- STOCKOUT RISK DETECTED ---")
 
@@ -313,13 +319,18 @@ def run_procurement_check():
             )
 
     if selected_supplier is None:
+     message = (
+        f"URGENT: {product['name']} is predicted "
+        f"to run out in "
+        f"{product['days_remaining']:.2f} days, "
+        f"but no supplier can deliver in time."
+    )
 
-        print(
-            "\nURGENT: No supplier can deliver "
-            "before the predicted stockout."
-        )
+    print(f"\n{message}")
 
-        return
+    write_decision(message)
+
+    return message
 
 
     purchase_order_id, quantity, total_price = (
@@ -376,6 +387,7 @@ def run_procurement_check():
     print(
         "\nDecision saved to Betsy's decision log."
     )
+    return message
 
 
 if __name__ == "__main__":

@@ -7,8 +7,7 @@ DB_NAME = "betsy.db"
 def get_connection():
     connection = sqlite3.connect(DB_NAME)
 
-    # This lets us access columns by name later:
-    # row["name"] instead of row[0]
+    # Allows row["name"] instead of row[0]
     connection.row_factory = sqlite3.Row
 
     return connection
@@ -108,7 +107,6 @@ def initialize_database():
 def seed_demo_data(connection):
     cursor = connection.cursor()
 
-    # Prevent duplicate demo data
     product_count = cursor.execute(
         "SELECT COUNT(*) FROM inventory"
     ).fetchone()[0]
@@ -116,9 +114,7 @@ def seed_demo_data(connection):
     if product_count > 0:
         return
 
-    # -----------------------------
     # Demo inventory item
-    # -----------------------------
     cursor.execute("""
         INSERT INTO inventory (
             sku,
@@ -140,9 +136,7 @@ def seed_demo_data(connection):
 
     product_id = cursor.lastrowid
 
-    # -----------------------------
     # Demo suppliers
-    # -----------------------------
     suppliers = [
         ("AccuParts Corp", 96),
         ("PrecisionSource", 94),
@@ -165,9 +159,7 @@ def seed_demo_data(connection):
 
         supplier_ids[name] = cursor.lastrowid
 
-    # -----------------------------
     # Supplier offers
-    # -----------------------------
     offers = [
         (
             supplier_ids["AccuParts Corp"],
@@ -240,6 +232,121 @@ def show_demo_data():
             f"Reliability: {supplier['reliability']}%"
         )
 
+    connection.close()
+
+
+def get_inventory():
+    connection = get_connection()
+
+    rows = connection.execute("""
+        SELECT *
+        FROM inventory
+        ORDER BY id
+    """).fetchall()
+
+    connection.close()
+
+    return [dict(row) for row in rows]
+
+
+def update_stock(product_id, new_stock):
+    connection = get_connection()
+
+    connection.execute("""
+        UPDATE inventory
+        SET current_stock = ?
+        WHERE id = ?
+    """, (
+        new_stock,
+        product_id
+    ))
+
+    connection.commit()
+    connection.close()
+
+
+def get_purchase_orders():
+    connection = get_connection()
+
+    rows = connection.execute("""
+        SELECT
+            po.id,
+            po.created_at,
+            i.name AS product,
+            s.name AS supplier,
+            po.quantity,
+            po.unit_price,
+            po.total_price,
+            po.status
+        FROM purchase_orders po
+        JOIN inventory i
+            ON i.id = po.inventory_id
+        JOIN suppliers s
+            ON s.id = po.supplier_id
+        ORDER BY po.id DESC
+    """).fetchall()
+
+    connection.close()
+
+    return [dict(row) for row in rows]
+
+
+def update_po_status(po_id, status):
+    connection = get_connection()
+
+    connection.execute("""
+        UPDATE purchase_orders
+        SET status = ?
+        WHERE id = ?
+    """, (
+        status,
+        po_id
+    ))
+
+    connection.commit()
+    connection.close()
+
+
+def get_decisions():
+    connection = get_connection()
+
+    rows = connection.execute("""
+        SELECT *
+        FROM decisions
+        ORDER BY id DESC
+    """).fetchall()
+
+    connection.close()
+
+    return [dict(row) for row in rows]
+
+
+def reset_demo():
+    connection = get_connection()
+
+    connection.execute("""
+        DELETE FROM purchase_orders
+    """)
+
+    connection.execute("""
+        DELETE FROM decisions
+    """)
+
+    connection.execute("""
+        UPDATE inventory
+        SET current_stock = 400
+        WHERE sku = 'BRG-001'
+    """)
+
+    connection.execute("""
+        DELETE FROM sqlite_sequence
+        WHERE name IN (
+            'purchase_orders',
+            'decisions'
+        )
+    """)
+
+    connection.commit()
     connection.close()
 
 
