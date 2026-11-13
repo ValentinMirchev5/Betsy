@@ -7,10 +7,17 @@ from database import get_connection
 TARGET_STOCK_DAYS = 4
 
 
+# --------------------------------------------------
+# Stockout detection
+# --------------------------------------------------
+
 def detect_stockout():
     """
     Checks inventory and returns the first product
     that is inside its reorder threshold.
+
+    Products with an already active purchase order
+    are ignored to prevent duplicate orders.
     """
 
     connection = get_connection()
@@ -26,16 +33,23 @@ def detect_stockout():
         current_stock = product["current_stock"]
         daily_usage = product["daily_usage"]
 
+        # Prevent division by zero or invalid usage values
         if daily_usage <= 0:
             continue
 
-        days_remaining = current_stock / daily_usage
+        days_remaining = (
+            current_stock / daily_usage
+        )
 
+        # Check whether Betsy is already handling this product
         active_order = connection.execute("""
             SELECT id
             FROM purchase_orders
             WHERE inventory_id = ?
-            AND status IN ('Pending Approval', 'Approved')
+            AND status IN (
+                'Pending Approval',
+                'Approved'
+            )
         """, (
             product["id"],
         )).fetchone()
@@ -43,9 +57,17 @@ def detect_stockout():
         if active_order:
             continue
 
-        if days_remaining <= product["reorder_threshold_days"]:
-            product["days_remaining"] = days_remaining
-            product["hours_remaining"] = days_remaining * 24
+        if (
+            days_remaining
+            <= product["reorder_threshold_days"]
+        ):
+            product["days_remaining"] = (
+                days_remaining
+            )
+
+            product["hours_remaining"] = (
+                days_remaining * 24
+            )
 
             connection.close()
 
@@ -55,6 +77,10 @@ def detect_stockout():
 
     return None
 
+
+# --------------------------------------------------
+# Supplier retrieval
+# --------------------------------------------------
 
 def get_supplier_options(product_id):
     """
@@ -71,31 +97,50 @@ def get_supplier_options(product_id):
             sp.unit_price,
             sp.delivery_hours,
             sp.available
+
         FROM supplier_products sp
 
         JOIN suppliers s
             ON s.id = sp.supplier_id
 
         WHERE sp.inventory_id = ?
-    """, (product_id,)).fetchall()
+    """, (
+        product_id,
+    )).fetchall()
 
     connection.close()
 
-    return [dict(row) for row in rows]
+    return [
+        dict(row)
+        for row in rows
+    ]
 
+
+# --------------------------------------------------
+# Deterministic supplier filtering and scoring
+# --------------------------------------------------
 
 def evaluate_suppliers(product):
     """
-    First removes suppliers that cannot safely fulfil
-    the order.
+    Applies hard safety rules first.
 
-    Then scores the remaining suppliers using:
+    Suppliers are rejected when:
+    - they are unavailable
+    - they cannot deliver before the predicted stockout
+
+    Remaining suppliers are scored using:
     - 40% price
     - 35% delivery speed
     - 25% reliability
+
+    This deterministic selection is also used as
+    Betsy's safe fallback if the LLM is unavailable
+    or produces an invalid recommendation.
     """
 
-    suppliers = get_supplier_options(product["id"])
+    suppliers = get_supplier_options(
+        product["id"]
+    )
 
     eligible_suppliers = []
 
@@ -103,20 +148,35 @@ def evaluate_suppliers(product):
         supplier["eligible"] = True
         supplier["rejection_reason"] = None
 
+        # Hard rule: unavailable suppliers cannot be used
         if supplier["available"] == 0:
             supplier["eligible"] = False
-            supplier["rejection_reason"] = "Supplier is unavailable"
-            continue
 
-        if supplier["delivery_hours"] > product["hours_remaining"]:
-            supplier["eligible"] = False
             supplier["rejection_reason"] = (
-                "Cannot deliver before predicted stockout"
+                "Supplier is unavailable"
             )
+
             continue
 
-        eligible_suppliers.append(supplier)
+        # Hard rule: supplier must arrive before stockout
+        if (
+            supplier["delivery_hours"]
+            > product["hours_remaining"]
+        ):
+            supplier["eligible"] = False
 
+            supplier["rejection_reason"] = (
+                "Cannot deliver before "
+                "predicted stockout"
+            )
+
+            continue
+
+        eligible_suppliers.append(
+            supplier
+        )
+
+    # No supplier passed the safety rules
     if not eligible_suppliers:
         return None, suppliers
 
@@ -131,16 +191,20 @@ def evaluate_suppliers(product):
     )
 
     for supplier in eligible_suppliers:
+
         price_score = (
-            cheapest_price / supplier["unit_price"]
+            cheapest_price
+            / supplier["unit_price"]
         )
 
         delivery_score = (
-            fastest_delivery / supplier["delivery_hours"]
+            fastest_delivery
+            / supplier["delivery_hours"]
         )
 
         reliability_score = (
-            supplier["reliability"] / 100
+            supplier["reliability"]
+            / 100
         )
 
         supplier["score"] = (
@@ -154,38 +218,67 @@ def evaluate_suppliers(product):
         key=lambda supplier: supplier["score"]
     )
 
-    return selected_supplier, suppliers
+    return (
+        selected_supplier,
+        suppliers
+    )
 
+
+# --------------------------------------------------
+# Order quantity calculation
+# --------------------------------------------------
 
 def calculate_order_quantity(product):
     """
-    Calculates enough stock to cover the target period
-    plus the safety stock.
+    Calculates enough stock to cover the target
+    stock period plus the safety stock.
     """
 
     target_stock = (
-        product["daily_usage"] * TARGET_STOCK_DAYS
+        product["daily_usage"]
+        * TARGET_STOCK_DAYS
         + product["safety_stock"]
     )
 
     quantity_needed = (
-        target_stock - product["current_stock"]
+        target_stock
+        - product["current_stock"]
     )
 
     return max(
         1,
         math.ceil(quantity_needed)
     )
-def create_purchase_order(product, supplier):
+
+
+# --------------------------------------------------
+# Purchase order creation
+# --------------------------------------------------
+
+def create_purchase_order(
+    product,
+    supplier
+):
     """
-    Creates a purchase order in the database.
-    The first version always requires human approval.
+    Creates a purchase order in SQLite.
+
+    New purchase orders start as Pending Approval.
     """
 
-    quantity = calculate_order_quantity(product)
+    quantity = (
+        calculate_order_quantity(
+            product
+        )
+    )
 
-    unit_price = supplier["unit_price"]
-    total_price = quantity * unit_price
+    unit_price = supplier[
+        "unit_price"
+    ]
+
+    total_price = (
+        quantity
+        * unit_price
+    )
 
     connection = get_connection()
     cursor = connection.cursor()
@@ -202,7 +295,9 @@ def create_purchase_order(product, supplier):
         )
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
-        datetime.now().isoformat(timespec="seconds"),
+        datetime.now().isoformat(
+            timespec="seconds"
+        ),
         product["id"],
         supplier["supplier_id"],
         quantity,
@@ -211,17 +306,37 @@ def create_purchase_order(product, supplier):
         "Pending Approval"
     ))
 
-    purchase_order_id = cursor.lastrowid
+    purchase_order_id = (
+        cursor.lastrowid
+    )
 
     connection.commit()
     connection.close()
 
-    return purchase_order_id, quantity, total_price
+    return (
+        purchase_order_id,
+        quantity,
+        total_price
+    )
 
 
-def write_decision(message):
+# --------------------------------------------------
+# Decision logging
+# --------------------------------------------------
+
+def write_decision(
+    message,
+    decision_type="Procurement Decision"
+):
     """
-    Saves an important Betsy decision to the audit log.
+    Saves an important Betsy decision to the
+    audit/decision log.
+
+    decision_type defaults to Procurement Decision,
+    so existing code continues to work.
+
+    The AI layer can use:
+    write_decision(message, "AI Recommendation")
     """
 
     connection = get_connection()
@@ -234,8 +349,10 @@ def write_decision(message):
         )
         VALUES (?, ?, ?)
     """, (
-        datetime.now().isoformat(timespec="seconds"),
-        "Procurement Decision",
+        datetime.now().isoformat(
+            timespec="seconds"
+        ),
+        decision_type,
         message
     ))
 
@@ -243,29 +360,51 @@ def write_decision(message):
     connection.close()
 
 
+# --------------------------------------------------
+# Legacy/manual procurement test
+# --------------------------------------------------
+
 def run_procurement_check():
     """
-    Temporary test function for Sprint 1.
+    Manual procurement test.
+
+    The real autonomous application now uses
+    LangGraph through agent.py and runner.py,
+    but this function remains useful for testing.
     """
 
     product = detect_stockout()
 
     if product is None:
-     message = (
-        "No new procurement action is required. "
-        "Inventory is safe or an active purchase order "
-        "already exists."
+        message = (
+            "No new procurement action is required. "
+            "Inventory is safe or an active purchase "
+            "order already exists."
+        )
+
+        print(
+            f"\n{message}"
+        )
+
+        return message
+
+    print(
+        "\n--- STOCKOUT RISK DETECTED ---"
     )
 
-    print(f"\n{message}")
+    print(
+        f"Product: {product['name']}"
+    )
 
-    return message
+    print(
+        f"Current stock: "
+        f"{product['current_stock']}"
+    )
 
-    print("\n--- STOCKOUT RISK DETECTED ---")
-
-    print(f"Product: {product['name']}")
-    print(f"Current stock: {product['current_stock']}")
-    print(f"Daily usage: {product['daily_usage']}")
+    print(
+        f"Daily usage: "
+        f"{product['daily_usage']}"
+    )
 
     print(
         f"Estimated stock remaining: "
@@ -277,11 +416,15 @@ def run_procurement_check():
         f"{product['hours_remaining']:.1f} hours"
     )
 
-    selected_supplier, suppliers = evaluate_suppliers(
-        product
+    selected_supplier, suppliers = (
+        evaluate_suppliers(
+            product
+        )
     )
 
-    print("\n--- SUPPLIER EVALUATION ---")
+    print(
+        "\n--- SUPPLIER EVALUATION ---"
+    )
 
     for supplier in suppliers:
 
@@ -290,28 +433,36 @@ def run_procurement_check():
         )
 
         print(
-            f"Price: EUR {supplier['unit_price']}"
+            f"Price: EUR "
+            f"{supplier['unit_price']}"
         )
 
         print(
-            f"Delivery: {supplier['delivery_hours']} hours"
+            f"Delivery: "
+            f"{supplier['delivery_hours']} hours"
         )
 
         print(
-            f"Reliability: {supplier['reliability']}%"
+            f"Reliability: "
+            f"{supplier['reliability']}%"
         )
 
         if supplier["eligible"]:
 
-            print("Status: ELIGIBLE")
+            print(
+                "Status: ELIGIBLE"
+            )
 
             print(
-                f"Score: {supplier['score']:.3f}"
+                f"Score: "
+                f"{supplier['score']:.3f}"
             )
 
         else:
 
-            print("Status: REJECTED")
+            print(
+                "Status: REJECTED"
+            )
 
             print(
                 f"Reason: "
@@ -319,19 +470,22 @@ def run_procurement_check():
             )
 
     if selected_supplier is None:
-     message = (
-        f"URGENT: {product['name']} is predicted "
-        f"to run out in "
-        f"{product['days_remaining']:.2f} days, "
-        f"but no supplier can deliver in time."
-    )
+        message = (
+            f"URGENT: {product['name']} is "
+            f"predicted to run out in "
+            f"{product['days_remaining']:.2f} days, "
+            f"but no supplier can deliver in time."
+        )
 
-    print(f"\n{message}")
+        print(
+            f"\n{message}"
+        )
 
-    write_decision(message)
+        write_decision(
+            message
+        )
 
-    return message
-
+        return message
 
     purchase_order_id, quantity, total_price = (
         create_purchase_order(
@@ -352,9 +506,13 @@ def run_procurement_check():
         f"Status: Pending Approval."
     )
 
-    write_decision(message)
+    write_decision(
+        message
+    )
 
-    print("\n--- BETSY DECISION ---")
+    print(
+        "\n--- BETSY DECISION ---"
+    )
 
     print(
         f"Selected supplier: "
@@ -362,12 +520,13 @@ def run_procurement_check():
     )
 
     print(
-        f"Order quantity: {quantity}"
+        f"Order quantity: "
+        f"{quantity}"
     )
 
     print(
-        f"Unit price: "
-        f"EUR {selected_supplier['unit_price']}"
+        f"Unit price: EUR "
+        f"{selected_supplier['unit_price']}"
     )
 
     print(
@@ -385,10 +544,16 @@ def run_procurement_check():
     )
 
     print(
-        "\nDecision saved to Betsy's decision log."
+        "\nDecision saved to "
+        "Betsy's decision log."
     )
+
     return message
 
+
+# --------------------------------------------------
+# Direct test execution
+# --------------------------------------------------
 
 if __name__ == "__main__":
     run_procurement_check()
