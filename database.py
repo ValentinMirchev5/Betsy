@@ -7,7 +7,6 @@ DB_NAME = "betsy.db"
 def get_connection():
     connection = sqlite3.connect(DB_NAME)
 
-    # Allows row["name"] instead of row[0]
     connection.row_factory = sqlite3.Row
 
     return connection

@@ -16,9 +16,6 @@ from procurement import (
 )
 
 
-# --------------------------------------------------
-# Application setup
-# --------------------------------------------------
 
 initialize_database()
 
@@ -28,9 +25,6 @@ st.set_page_config(
 )
 
 
-# --------------------------------------------------
-# Header
-# --------------------------------------------------
 
 st.title("Betsy")
 st.subheader("Autonomous Procurement Agent")
@@ -38,14 +32,13 @@ st.subheader("Autonomous Procurement Agent")
 st.success("Agent Status: ACTIVE")
 
 
-# Show messages after actions / reruns.
 if "flash_message" in st.session_state:
     st.info(st.session_state.pop("flash_message"))
 
 
-# --------------------------------------------------
+
 # Load current data
-# --------------------------------------------------
+
 
 inventory = get_inventory()
 purchase_orders = get_purchase_orders()
@@ -57,9 +50,8 @@ pending_orders = [
 ]
 
 
-# --------------------------------------------------
 # Dashboard metrics
-# --------------------------------------------------
+
 
 st.divider()
 
