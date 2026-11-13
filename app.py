@@ -52,27 +52,40 @@ pending_orders = [
 
 # Dashboard metrics
 
+@st.fragment(run_every="5s")
+def live_overview():
+    inventory = get_inventory()
+    purchase_orders = get_purchase_orders()
 
-st.divider()
+    pending_orders = [
+        po
+        for po in purchase_orders
+        if po["status"] == "Pending Approval"
+    ]
 
-st.header("Overview")
+    st.divider()
 
-col1, col2, col3 = st.columns(3)
+    st.header("Overview")
 
-col1.metric(
-    "Inventory Items",
-    len(inventory)
-)
+    col1, col2, col3 = st.columns(3)
 
-col2.metric(
-    "Purchase Orders",
-    len(purchase_orders)
-)
+    col1.metric(
+        "Inventory Items",
+        len(inventory)
+    )
 
-col3.metric(
-    "Pending Approvals",
-    len(pending_orders)
-)
+    col2.metric(
+        "Purchase Orders",
+        len(purchase_orders)
+    )
+
+    col3.metric(
+        "Pending Approvals",
+        len(pending_orders)
+    )
+
+
+live_overview()
 
 
 # --------------------------------------------------
@@ -183,133 +196,143 @@ if st.button(
 # Purchase orders
 # --------------------------------------------------
 
-st.divider()
+@st.fragment(run_every="5s")
+def live_purchase_orders():
 
-st.header("Purchase Orders")
+    st.divider()
 
-purchase_orders = get_purchase_orders()
+    st.header("Purchase Orders")
 
+    purchase_orders = get_purchase_orders()
 
-if not purchase_orders:
+    if not purchase_orders:
 
-    st.info(
-        "No purchase orders have been created yet."
-    )
-
-else:
-
-    for po in purchase_orders:
-
-        st.subheader(
-            f"PO-{po['id']:04d}"
+        st.info(
+            "No purchase orders have been created yet."
         )
 
-        col1, col2, col3, col4 = st.columns(4)
+    else:
 
-        col1.write(
-            f"**Product**\n\n{po['product']}"
-        )
+        for po in purchase_orders:
 
-        col2.write(
-            f"**Supplier**\n\n{po['supplier']}"
-        )
+            st.subheader(
+                f"PO-{po['id']:04d}"
+            )
 
-        col3.write(
-            f"**Quantity**\n\n{po['quantity']}"
-        )
+            col1, col2, col3, col4 = st.columns(4)
 
-        col4.write(
-            f"**Total**\n\nâ‚¬{po['total_price']:,.2f}"
-        )
+            col1.write(
+                f"**Product**\n\n{po['product']}"
+            )
 
-        st.write(
-            f"**Status:** {po['status']}"
-        )
+            col2.write(
+                f"**Supplier**\n\n{po['supplier']}"
+            )
 
-        st.write(
-            f"Created: {po['created_at']}"
-        )
+            col3.write(
+                f"**Quantity**\n\n{po['quantity']}"
+            )
 
-        if po["status"] == "Pending Approval":
+            col4.write(
+                f"**Total**\n\nEUR {po['total_price']:,.2f}"
+            )
 
-            approve_col, reject_col = st.columns(2)
+            st.write(
+                f"**Status:** {po['status']}"
+            )
 
-            with approve_col:
+            st.write(
+                f"Created: {po['created_at']}"
+            )
 
-                if st.button(
-                    "Approve Purchase Order",
-                    key=f"approve_{po['id']}"
-                ):
+            if po["status"] == "Pending Approval":
 
-                    update_po_status(
-                        po["id"],
-                        "Approved"
-                    )
+                approve_col, reject_col = st.columns(2)
 
-                    write_decision(
-                        f"PO-{po['id']:04d} was approved "
-                        f"by the human operator."
-                    )
+                with approve_col:
 
-                    st.session_state["flash_message"] = (
-                        f"PO-{po['id']:04d} approved."
-                    )
+                    if st.button(
+                        "Approve Purchase Order",
+                        key=f"approve_{po['id']}"
+                    ):
 
-                    st.rerun()
+                        update_po_status(
+                            po["id"],
+                            "Approved"
+                        )
 
-            with reject_col:
+                        write_decision(
+                            f"PO-{po['id']:04d} was approved "
+                            f"by the human operator."
+                        )
 
-                if st.button(
-                    "Reject Purchase Order",
-                    key=f"reject_{po['id']}"
-                ):
+                        st.session_state["flash_message"] = (
+                            f"PO-{po['id']:04d} approved."
+                        )
 
-                    update_po_status(
-                        po["id"],
-                        "Rejected"
-                    )
+                        st.rerun()
 
-                    write_decision(
-                        f"PO-{po['id']:04d} was rejected "
-                        f"by the human operator."
-                    )
+                with reject_col:
 
-                    st.session_state["flash_message"] = (
-                        f"PO-{po['id']:04d} rejected."
-                    )
+                    if st.button(
+                        "Reject Purchase Order",
+                        key=f"reject_{po['id']}"
+                    ):
 
-                    st.rerun()
+                        update_po_status(
+                            po["id"],
+                            "Rejected"
+                        )
 
-        st.divider()
+                        write_decision(
+                            f"PO-{po['id']:04d} was rejected "
+                            f"by the human operator."
+                        )
+
+                        st.session_state["flash_message"] = (
+                            f"PO-{po['id']:04d} rejected."
+                        )
+
+                        st.rerun()
+
+            st.divider()
+
+
+live_purchase_orders()
 
 
 # --------------------------------------------------
 # Decision log
 # --------------------------------------------------
 
-st.header("Decision Log")
+@st.fragment(run_every="5s")
+def live_decision_log():
 
-decisions = get_decisions()
+    st.header("Decision Log")
+
+    decisions = get_decisions()
+
+    if not decisions:
+
+        st.info(
+            "Betsy has not recorded any decisions yet."
+        )
+
+    else:
+
+        for decision in decisions:
+
+            with st.expander(
+                f"{decision['created_at']} - "
+                f"{decision['decision_type']}"
+            ):
+
+                st.write(
+                    decision["message"]
+                )
 
 
-if not decisions:
-
-    st.info(
-        "Betsy has not recorded any decisions yet."
-    )
-
-else:
-
-    for decision in decisions:
-
-        with st.expander(
-            f"{decision['created_at']} - "
-            f"{decision['decision_type']}"
-        ):
-
-            st.write(
-                decision["message"]
-            )
+live_decision_log()
 
 
 # --------------------------------------------------
