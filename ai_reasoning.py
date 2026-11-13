@@ -124,3 +124,50 @@ Return the answer as structured JSON.
     )
 
     return recommendation
+if __name__ == "__main__":
+
+    from procurement import (
+        detect_stockout,
+        evaluate_suppliers
+    )
+
+    product = detect_stockout()
+
+    if product is None:
+        print(
+            "No stockout scenario is currently available."
+        )
+
+    else:
+
+        deterministic_choice, suppliers = (
+            evaluate_suppliers(product)
+        )
+
+        recommendation = recommend_supplier(
+            product,
+            suppliers
+        )
+
+        print("\n--- AI SUPPLIER RECOMMENDATION ---")
+
+        print(
+            f"Supplier: "
+            f"{recommendation.supplier_name}"
+        )
+
+        print(
+            f"Risk level: "
+            f"{recommendation.risk_level}"
+        )
+
+        print(
+            f"Confidence: "
+            f"{recommendation.confidence}"
+        )
+
+        print("\nReasoning:")
+
+        print(
+            recommendation.reasoning
+        )
